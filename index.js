@@ -1,23 +1,40 @@
 import fetch from "node-fetch";
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, Collection } from "discord.js";
 import dotenv from "dotenv";
 dotenv.config();
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+// Kurangi cache Discord agar hemat memori
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+  makeCache: () => new Collection()
+});
 
-const CHANNEL_ID = process.env.CHANNEL_ID; 
+const CHANNEL_ID = process.env.CHANNEL_ID;
 const ROBLOX_USERNAME = "nonamanisey";
 const USER_ID = process.env.USER_ID;
 
 let lastStatus = null;
+let isChecking = false; // <--- tambahkan anti overlap
 
 client.once("ready", () => {
   console.log(`✅ Bot logged in as ${client.user.tag}`);
   checkStatus();
   setInterval(checkStatus, 60000); // cek tiap 1 menit
+
+  // Tambahan: pantau pemakaian memori (debug)
+  setInterval(() => {
+    const used = process.memoryUsage().rss / 1024 / 1024;
+    console.log(`🧠 Memory usage: ${used.toFixed(2)} MB`);
+  }, 60000);
 });
 
 async function checkStatus() {
+  if (isChecking) {
+    console.log("⏳ Check masih berjalan, skip interval berikutnya...");
+    return;
+  }
+  isChecking = true;
+
   try {
     // Ambil ID user Roblox
     const res = await fetch("https://users.roblox.com/v1/usernames/users", {
@@ -31,8 +48,10 @@ async function checkStatus() {
 
     const data = await res.json();
     if (!data.data || data.data.length === 0) {
-      return console.log(`❌ User "${ROBLOX_USERNAME}" tidak ditemukan`);
+      console.log(`❌ User "${ROBLOX_USERNAME}" tidak ditemukan`);
+      return;
     }
+
     const id = data.data[0].id;
 
     // Ambil status presence
@@ -44,24 +63,25 @@ async function checkStatus() {
 
     const presenceData = await presenceRes.json();
     if (!presenceData.userPresences || presenceData.userPresences.length === 0) {
-      return console.log(`⚫ Tidak ada data presence untuk user "${ROBLOX_USERNAME}"`);
+      console.log(`⚫ Tidak ada data presence untuk user "${ROBLOX_USERNAME}"`);
+      return;
     }
 
     const info = presenceData.userPresences[0];
+    const status =
+      info.userPresenceType === 2 ? `🎮 Lagi main game ID ${info.placeId}` :
+      info.userPresenceType === 1 ? "🟢 Online" : "⚫ Offline";
 
-    // Tentukan status
-    const status = info.userPresenceType === 2 ? `🎮 Lagi main game ID ${info.placeId}` :
-                   info.userPresenceType === 1 ? "🟢 Online" : "⚫ Offline";
-
-    // Kirim pesan hanya kalau status berubah dan tag user Discord
     if (status !== lastStatus) {
       const channel = await client.channels.fetch(CHANNEL_ID);
-      channel.send(`<@${USER_ID}> Status ${info.userDisplayName || ROBLOX_USERNAME}: ${status}`);
+      await channel.send(`<@${USER_ID}> Status ${info.userDisplayName || ROBLOX_USERNAME}: ${status}`);
       lastStatus = status;
     }
 
   } catch (err) {
     console.error("❌ Error checkStatus:", err);
+  } finally {
+    isChecking = false;
   }
 }
 
